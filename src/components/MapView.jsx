@@ -1,28 +1,12 @@
 import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import RotatableOverlay, { rotateLatLng, angleTo } from './RotatableOverlay';
-
-const cornerIcon = L.divIcon({
-  className: '',
-  html: '<div style="width:14px;height:14px;background:#3b82f6;border:2px solid #fff;border-radius:3px;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:nwse-resize"></div>',
-  iconSize: [14, 14], iconAnchor: [7, 7],
-});
-const moveIcon = L.divIcon({
-  className: '',
-  html: '<div style="width:18px;height:18px;background:#10b981;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:move;display:flex;align-items:center;justify-content:center;font-size:11px">✥</div>',
-  iconSize: [18, 18], iconAnchor: [9, 9],
-});
-const rotateIcon = L.divIcon({
-  className: '',
-  html: '<div style="width:16px;height:16px;background:#f97316;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:crosshair;display:flex;align-items:center;justify-content:center;font-size:11px">↻</div>',
-  iconSize: [16, 16], iconAnchor: [8, 8],
-});
+import { computeOverlayTransform } from '../hooks/useAffineTransform';
 
 const MapView = forwardRef(function MapView({
   imageUrl,
-  overlayConfig,
-  onOverlayConfigChange,
+  imageNatW,
+  imageNatH,
   opacity,
   mode,
   controlPoints,
@@ -31,9 +15,9 @@ const MapView = forwardRef(function MapView({
 }, ref) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
-  const overlayRef = useRef(null);
+  const imgElRef = useRef(null);
   const queryMarkerRef = useRef(null);
-  const handleMarkersRef = useRef([]);
+  const stateRef = useRef({ controlPoints, opacity, imageUrl, imageNatW, imageNatH });
 
   useImperativeHandle(ref, () => ({
     getCenter: () => {
@@ -42,143 +26,61 @@ const MapView = forwardRef(function MapView({
     },
   }));
 
-  // Init map
+  // Keep stateRef current
+  stateRef.current = { controlPoints, opacity, imageUrl, imageNatW, imageNatH };
+
+  function applyTransform() {
+    const map = mapRef.current;
+    const img = imgElRef.current;
+    if (!map || !img) return;
+    const { controlPoints, opacity } = stateRef.current;
+
+    img.style.opacity = opacity;
+
+    if (controlPoints.length < 2) {
+      img.style.display = 'none';
+      return;
+    }
+
+    const t = computeOverlayTransform(controlPoints, map);
+    if (!t) { img.style.display = 'none'; return; }
+
+    img.style.display = 'block';
+    img.style.transform = `matrix(${t.a},${t.b},${t.c},${t.d},${t.tx},${t.ty})`;
+  }
+
+  // Init map once
   useEffect(() => {
     if (mapRef.current) return;
     const map = L.map(containerRef.current).setView([46.5, 2.5], 6);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap contributors',
     }).addTo(map);
+    map.on('move zoom viewreset zoomend moveend', applyTransform);
     mapRef.current = map;
   }, []);
 
-  // Overlay lifecycle
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !imageUrl || !overlayConfig) return;
-    if (overlayRef.current) overlayRef.current.remove();
-    const ov = new RotatableOverlay(imageUrl, { ...overlayConfig, opacity });
-    ov.addTo(map);
-    overlayRef.current = ov;
-  }, [imageUrl]);
-
-  // Update overlay config + opacity
-  useEffect(() => {
-    overlayRef.current?.setConfig({ ...overlayConfig, opacity });
-  }, [overlayConfig, opacity]);
-
-  // Handles
+  // Create/recreate image element when imageUrl changes
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    handleMarkersRef.current.forEach(m => m.remove());
-    handleMarkersRef.current = [];
 
-    if (!imageUrl || !overlayConfig || !onOverlayConfigChange || mode !== 'calibrate') return;
+    if (imgElRef.current) imgElRef.current.remove();
 
-    let cfg = { ...overlayConfig };
+    if (!imageUrl) { imgElRef.current = null; return; }
 
-    function commit(newCfg) {
-      cfg = { ...cfg, ...newCfg };
-      overlayRef.current?.setConfig({ ...cfg, opacity });
-      onOverlayConfigChange(cfg);
-      refresh();
-    }
+    const img = document.createElement('img');
+    img.src = imageUrl;
+    img.style.cssText = `position:absolute;left:0;top:0;width:${imageNatW}px;height:${imageNatH}px;transform-origin:0 0;pointer-events:none;display:none;`;
+    map.getPanes().overlayPane.appendChild(img);
+    imgElRef.current = img;
+    applyTransform();
+  }, [imageUrl]);
 
-    function cornerPos(dLat, dLng) {
-      return rotateLatLng(
-        cfg.center[0] + dLat,
-        cfg.center[1] + dLng,
-        cfg.center[0], cfg.center[1], cfg.rotation
-      );
-    }
+  // Re-apply when control points or opacity change
+  useEffect(() => { applyTransform(); }, [controlPoints, opacity]);
 
-    const halfH = cfg.heightDeg / 2;
-    const halfW = cfg.widthDeg / 2;
-
-    // Rotate handle: above top-center
-    const rotHandlePos = () => rotateLatLng(
-      cfg.center[0] + cfg.heightDeg / 2 + cfg.heightDeg * 0.2,
-      cfg.center[1],
-      cfg.center[0], cfg.center[1], cfg.rotation
-    );
-
-    const markers = [];
-
-    // Center / move handle
-    const moveM = L.marker(cfg.center, { icon: moveIcon, draggable: true, zIndexOffset: 2000 }).addTo(map);
-    moveM.on('drag', ev => {
-      cfg.center = [ev.latlng.lat, ev.latlng.lng];
-      overlayRef.current?.setConfig({ ...cfg, opacity });
-      refresh();
-    });
-    moveM.on('dragend', () => onOverlayConfigChange({ ...cfg }));
-    markers.push(moveM);
-
-    // Rotate handle
-    const rotM = L.marker(rotHandlePos(), { icon: rotateIcon, draggable: true, zIndexOffset: 2000 }).addTo(map);
-    rotM.on('drag', ev => {
-      const angle = angleTo(ev.latlng.lat, ev.latlng.lng, cfg.center[0], cfg.center[1]);
-      cfg.rotation = ((angle % 360) + 360) % 360;
-      overlayRef.current?.setConfig({ ...cfg, opacity });
-      refresh();
-    });
-    rotM.on('dragend', () => onOverlayConfigChange({ ...cfg }));
-    markers.push(rotM);
-
-    // 4 corner handles — opposite corner captured once on dragstart, stays fixed during drag
-    const cornerSigns = [[1, -1], [1, 1], [-1, 1], [-1, -1]];
-    const corners = cornerSigns.map(([sLat, sLng]) => [sLat * halfH, sLng * halfW]);
-
-    corners.forEach(([dLat, dLng], i) => {
-      let fixedOpp = null; // captured at dragstart
-
-      const m = L.marker(cornerPos(dLat, dLng), { icon: cornerIcon, draggable: true, zIndexOffset: 1500 }).addTo(map);
-
-      m.on('dragstart', () => {
-        const [oSLat, oSLng] = cornerSigns[(i + 2) % 4];
-        fixedOpp = rotateLatLng(
-          cfg.center[0] + oSLat * cfg.heightDeg / 2,
-          cfg.center[1] + oSLng * cfg.widthDeg / 2,
-          cfg.center[0], cfg.center[1], cfg.rotation
-        );
-      });
-
-      m.on('drag', ev => {
-        if (!fixedOpp) return;
-        const newCenterLat = (ev.latlng.lat + fixedOpp[0]) / 2;
-        const newCenterLng = (ev.latlng.lng + fixedOpp[1]) / 2;
-        const cosLat = Math.cos(newCenterLat * Math.PI / 180);
-        const rad = -cfg.rotation * Math.PI / 180;
-        const dx = (ev.latlng.lng - newCenterLng) * 111000 * cosLat;
-        const dy = (ev.latlng.lat - newCenterLat) * 111000;
-        const ux = dx * Math.cos(rad) + dy * Math.sin(rad);
-        const uy = -dx * Math.sin(rad) + dy * Math.cos(rad);
-        cfg.center = [newCenterLat, newCenterLng];
-        cfg.widthDeg = Math.max(0.01, Math.abs(ux) * 2 / (111000 * cosLat));
-        cfg.heightDeg = Math.max(0.01, Math.abs(uy) * 2 / 111000);
-        overlayRef.current?.setConfig({ ...cfg, opacity });
-        refresh();
-      });
-
-      m.on('dragend', () => { fixedOpp = null; onOverlayConfigChange({ ...cfg }); });
-      markers.push(m);
-    });
-
-    handleMarkersRef.current = markers;
-
-    function refresh() {
-      const h = cfg.heightDeg / 2;
-      const w = cfg.widthDeg / 2;
-      const corners2 = [[h, -w], [h, w], [-h, w], [-h, -w]];
-      // corners start at index 2 (after moveM and rotM)
-      corners2.forEach((c, i) => markers[i + 2].setLatLng(cornerPos(c[0], c[1])));
-      markers[0].setLatLng(cfg.center);
-      markers[1].setLatLng(rotHandlePos());
-    }
-  }, [imageUrl, overlayConfig, onOverlayConfigChange, mode, opacity]);
-
-  // Map click
+  // Map click handler
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -201,7 +103,7 @@ const MapView = forwardRef(function MapView({
     });
   }, [controlPoints]);
 
-  // Query marker
+  // Query result marker
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;

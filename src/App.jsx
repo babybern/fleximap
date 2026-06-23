@@ -6,13 +6,10 @@ import ControlPointPanel from './components/ControlPointPanel';
 import { buildTPS } from './hooks/useTPS';
 import './App.css';
 
-const DEFAULT_OVERLAY = { center: [46.5, 2.5], widthDeg: 15, heightDeg: 10, rotation: 0 };
-
 export default function App() {
   const [imageUrl, setImageUrl] = useState(null);
   const [imageSize, setImageSize] = useState({ w: 1, h: 1 });
   const [opacity, setOpacity] = useState(0.6);
-  const [overlayConfig, setOverlayConfig] = useState(DEFAULT_OVERLAY);
   const [controlPoints, setControlPoints] = useState([]);
   const [pendingImg, setPendingImg] = useState(null);
   const [addingPoint, setAddingPoint] = useState(false);
@@ -28,9 +25,6 @@ export default function App() {
     setImageSize({ w, h });
     setControlPoints([]);
     setQueryResult(null);
-    // Center overlay on current map view
-    const center = mapRef.current?.getCenter() ?? [46.5, 2.5];
-    setOverlayConfig({ center, widthDeg: 15, heightDeg: 10, rotation: 0 });
   }
 
   function startAddPoint() {
@@ -65,7 +59,7 @@ export default function App() {
   }
 
   function saveCalibration() {
-    const data = { controlPoints, overlayConfig };
+    const data = { controlPoints };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -81,7 +75,6 @@ export default function App() {
       try {
         const data = JSON.parse(ev.target.result);
         setControlPoints(data.controlPoints || []);
-        if (data.overlayConfig) setOverlayConfig(data.overlayConfig);
       } catch {
         alert('Fichier invalide');
       }
@@ -148,14 +141,10 @@ export default function App() {
                 onDelete={deletePoint}
                 onClear={() => setControlPoints([])}
               />
-              {imageUrl && (
-                <div className="panel hint" style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                  <strong>Handles :</strong><br />
-                  🟢 Vert = déplacer<br />
-                  🟠 Orange = pivoter<br />
-                  🔵 Bleu = redimensionner
-                </div>
-              )}
+              <div className="panel" style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                Dès 2 points, l'image s'aligne sur la carte.<br />
+                3+ points pour la conversion GPS.
+              </div>
             </>
           )}
           {mode === 'query' && (
@@ -178,8 +167,8 @@ export default function App() {
           <MapView
             ref={mapRef}
             imageUrl={imageUrl}
-            overlayConfig={overlayConfig}
-            onOverlayConfigChange={setOverlayConfig}
+            imageNatW={imageSize.w}
+            imageNatH={imageSize.h}
             opacity={opacity}
             mode={mode}
             controlPoints={controlPoints}
