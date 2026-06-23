@@ -126,36 +126,42 @@ const MapView = forwardRef(function MapView({
     rotM.on('dragend', () => onOverlayConfigChange({ ...cfg }));
     markers.push(rotM);
 
-    // 4 corner handles — opposite corner stays fixed
-    const corners = [
-      [halfH, -halfW], [halfH, halfW], [-halfH, halfW], [-halfH, -halfW]
-    ];
+    // 4 corner handles — opposite corner captured once on dragstart, stays fixed during drag
+    const cornerSigns = [[1, -1], [1, 1], [-1, 1], [-1, -1]];
+    const corners = cornerSigns.map(([sLat, sLng]) => [sLat * halfH, sLng * halfW]);
+
     corners.forEach(([dLat, dLng], i) => {
+      let fixedOpp = null; // captured at dragstart
+
       const m = L.marker(cornerPos(dLat, dLng), { icon: cornerIcon, draggable: true, zIndexOffset: 1500 }).addTo(map);
+
+      m.on('dragstart', () => {
+        const [oSLat, oSLng] = cornerSigns[(i + 2) % 4];
+        fixedOpp = rotateLatLng(
+          cfg.center[0] + oSLat * cfg.heightDeg / 2,
+          cfg.center[1] + oSLng * cfg.widthDeg / 2,
+          cfg.center[0], cfg.center[1], cfg.rotation
+        );
+      });
+
       m.on('drag', ev => {
-        // World position of the opposite corner (fixed)
-        const [oDLat, oDLng] = corners[(i + 2) % 4];
-        const oppWorld = cornerPos(oDLat, oDLng);
-
-        // New center = midpoint between drag and opposite corner
-        const newCenterLat = (ev.latlng.lat + oppWorld[0]) / 2;
-        const newCenterLng = (ev.latlng.lng + oppWorld[1]) / 2;
-
-        // Unrotate drag position relative to new center to get image-space offset
+        if (!fixedOpp) return;
+        const newCenterLat = (ev.latlng.lat + fixedOpp[0]) / 2;
+        const newCenterLng = (ev.latlng.lng + fixedOpp[1]) / 2;
         const cosLat = Math.cos(newCenterLat * Math.PI / 180);
         const rad = -cfg.rotation * Math.PI / 180;
         const dx = (ev.latlng.lng - newCenterLng) * 111000 * cosLat;
         const dy = (ev.latlng.lat - newCenterLat) * 111000;
         const ux = dx * Math.cos(rad) + dy * Math.sin(rad);
         const uy = -dx * Math.sin(rad) + dy * Math.cos(rad);
-
         cfg.center = [newCenterLat, newCenterLng];
         cfg.widthDeg = Math.max(0.01, Math.abs(ux) * 2 / (111000 * cosLat));
         cfg.heightDeg = Math.max(0.01, Math.abs(uy) * 2 / 111000);
         overlayRef.current?.setConfig({ ...cfg, opacity });
         refresh();
       });
-      m.on('dragend', () => onOverlayConfigChange({ ...cfg }));
+
+      m.on('dragend', () => { fixedOpp = null; onOverlayConfigChange({ ...cfg }); });
       markers.push(m);
     });
 
