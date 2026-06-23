@@ -126,20 +126,30 @@ const MapView = forwardRef(function MapView({
     rotM.on('dragend', () => onOverlayConfigChange({ ...cfg }));
     markers.push(rotM);
 
-    // 4 corner handles (symmetric resize)
+    // 4 corner handles — opposite corner stays fixed
     const corners = [
       [halfH, -halfW], [halfH, halfW], [-halfH, halfW], [-halfH, -halfW]
     ];
-    corners.forEach(([dLat, dLng]) => {
+    corners.forEach(([dLat, dLng], i) => {
       const m = L.marker(cornerPos(dLat, dLng), { icon: cornerIcon, draggable: true, zIndexOffset: 1500 }).addTo(map);
       m.on('drag', ev => {
-        // Unrotate drag position to image space
-        const cosLat = Math.cos(cfg.center[0] * Math.PI / 180);
+        // World position of the opposite corner (fixed)
+        const [oDLat, oDLng] = corners[(i + 2) % 4];
+        const oppWorld = cornerPos(oDLat, oDLng);
+
+        // New center = midpoint between drag and opposite corner
+        const newCenterLat = (ev.latlng.lat + oppWorld[0]) / 2;
+        const newCenterLng = (ev.latlng.lng + oppWorld[1]) / 2;
+
+        // Unrotate drag position relative to new center to get image-space offset
+        const cosLat = Math.cos(newCenterLat * Math.PI / 180);
         const rad = -cfg.rotation * Math.PI / 180;
-        const dx = (ev.latlng.lng - cfg.center[1]) * 111000 * cosLat;
-        const dy = (ev.latlng.lat - cfg.center[0]) * 111000;
+        const dx = (ev.latlng.lng - newCenterLng) * 111000 * cosLat;
+        const dy = (ev.latlng.lat - newCenterLat) * 111000;
         const ux = dx * Math.cos(rad) + dy * Math.sin(rad);
         const uy = -dx * Math.sin(rad) + dy * Math.cos(rad);
+
+        cfg.center = [newCenterLat, newCenterLng];
         cfg.widthDeg = Math.max(0.01, Math.abs(ux) * 2 / (111000 * cosLat));
         cfg.heightDeg = Math.max(0.01, Math.abs(uy) * 2 / 111000);
         overlayRef.current?.setConfig({ ...cfg, opacity });
