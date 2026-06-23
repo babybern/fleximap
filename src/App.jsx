@@ -12,7 +12,7 @@ export default function App() {
   const [imageUrl, setImageUrl] = useState(null);
   const [imageSize, setImageSize] = useState({ w: 1, h: 1 });
   const [opacity, setOpacity] = useState(0.6);
-  const [imageBounds] = useState(DEFAULT_BOUNDS);
+  const [imageBounds, setImageBounds] = useState(DEFAULT_BOUNDS);
   const [controlPoints, setControlPoints] = useState([]);
   const [pendingImg, setPendingImg] = useState(null);
   const [addingPoint, setAddingPoint] = useState(false);
@@ -164,6 +164,7 @@ export default function App() {
           <MapView
             imageUrl={imageUrl}
             imageBounds={imageBounds}
+            onImageBoundsChange={setImageBounds}
             opacity={opacity}
             mode={mode}
             controlPoints={controlPoints}

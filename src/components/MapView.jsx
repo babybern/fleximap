@@ -1,13 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// Fix default marker icons
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+// Corner handle icon
+const handleIcon = L.divIcon({
+  className: '',
+  html: '<div style="width:14px;height:14px;background:#3b82f6;border:2px solid #fff;border-radius:3px;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:move"></div>',
+  iconSize: [14, 14],
+  iconAnchor: [7, 7],
+});
+
+// Edge handle icon (thinner)
+const edgeIcon = L.divIcon({
+  className: '',
+  html: '<div style="width:10px;height:10px;background:#60a5fa;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.3);cursor:move"></div>',
+  iconSize: [10, 10],
+  iconAnchor: [5, 5],
 });
 
 export default function MapView({
@@ -15,7 +23,7 @@ export default function MapView({
   imageBounds,
   onImageBoundsChange,
   opacity,
-  mode, // 'adjust' | 'calibrate' | 'query'
+  mode,
   controlPoints,
   onMapClick,
   queryResult,
@@ -24,6 +32,7 @@ export default function MapView({
   const mapRef = useRef(null);
   const overlayRef = useRef(null);
   const markerRef = useRef(null);
+  const handleMarkersRef = useRef([]);
 
   // Init map once
   useEffect(() => {
@@ -35,19 +44,77 @@ export default function MapView({
     mapRef.current = map;
   }, []);
 
-  // Update overlay when image or bounds change
+  // Overlay: update when image or bounds change
   useEffect(() => {
-    if (!mapRef.current || !imageUrl || !imageBounds) return;
+    const map = mapRef.current;
+    if (!map || !imageUrl || !imageBounds) return;
     if (overlayRef.current) overlayRef.current.remove();
     const overlay = L.imageOverlay(imageUrl, imageBounds, { opacity, interactive: false });
-    overlay.addTo(mapRef.current);
+    overlay.addTo(map);
     overlayRef.current = overlay;
   }, [imageUrl, imageBounds]);
 
-  // Update opacity
+  // Opacity only
   useEffect(() => {
     overlayRef.current?.setOpacity(opacity);
   }, [opacity]);
+
+  // Corner + edge handles for repositioning overlay
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    // Remove old handles
+    handleMarkersRef.current.forEach(m => m.remove());
+    handleMarkersRef.current = [];
+
+    if (!imageUrl || !imageBounds || !onImageBoundsChange) return;
+
+    // bounds: [[south, west], [north, east]]
+    let [s, w, n, e] = [imageBounds[0][0], imageBounds[0][1], imageBounds[1][0], imageBounds[1][1]];
+
+    // We create 8 handles: 4 corners + 4 edge midpoints
+    // Each handle knows which bounds edges it can move
+    const handles = [
+      // corners
+      { pos: () => [s, w], update: (lat, lng) => { s = lat; w = lng; }, icon: handleIcon },
+      { pos: () => [n, w], update: (lat, lng) => { n = lat; w = lng; }, icon: handleIcon },
+      { pos: () => [n, e], update: (lat, lng) => { n = lat; e = lng; }, icon: handleIcon },
+      { pos: () => [s, e], update: (lat, lng) => { s = lat; e = lng; }, icon: handleIcon },
+      // edges
+      { pos: () => [(s + n) / 2, w], update: (_, lng) => { w = lng; }, icon: edgeIcon },
+      { pos: () => [n, (w + e) / 2], update: (lat) => { n = lat; }, icon: edgeIcon },
+      { pos: () => [(s + n) / 2, e], update: (_, lng) => { e = lng; }, icon: edgeIcon },
+      { pos: () => [s, (w + e) / 2], update: (lat) => { s = lat; }, icon: edgeIcon },
+    ];
+
+    const markers = handles.map(({ pos, update, icon }) => {
+      const m = L.marker(pos(), { icon, draggable: true, zIndexOffset: 1000 }).addTo(map);
+      m.on('drag', (ev) => {
+        const { lat, lng } = ev.latlng;
+        update(lat, lng);
+        // Refresh all marker positions
+        markers.forEach((mk, i) => mk.setLatLng(handles[i].pos()));
+        // Update overlay live
+        if (overlayRef.current) overlayRef.current.setBounds([[s, w], [n, e]]);
+      });
+      m.on('dragend', () => {
+        onImageBoundsChange([[s, w], [n, e]]);
+      });
+      return m;
+    });
+
+    handleMarkersRef.current = markers;
+  }, [imageUrl, imageBounds, onImageBoundsChange]);
+
+  // Show/hide handles depending on mode
+  useEffect(() => {
+    const show = mode === 'calibrate';
+    handleMarkersRef.current.forEach(m => {
+      const el = m.getElement();
+      if (el) el.style.display = show ? '' : 'none';
+    });
+  }, [mode]);
 
   // Map click handler
   useEffect(() => {
@@ -62,7 +129,6 @@ export default function MapView({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    // Remove old cp markers stored on map
     if (map._cpMarkers) map._cpMarkers.forEach(m => m.remove());
     map._cpMarkers = controlPoints.map((cp, i) => {
       const m = L.circleMarker([cp.gps[0], cp.gps[1]], {
