@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import MapView from './components/MapView';
 import ImageCanvas from './components/ImageCanvas';
 import ImagePicker from './components/ImagePicker';
@@ -6,19 +6,20 @@ import ControlPointPanel from './components/ControlPointPanel';
 import { buildTPS } from './hooks/useTPS';
 import './App.css';
 
-const DEFAULT_BOUNDS = [[41, -5], [51, 10]];
+const DEFAULT_OVERLAY = { center: [46.5, 2.5], widthDeg: 15, heightDeg: 10, rotation: 0 };
 
 export default function App() {
   const [imageUrl, setImageUrl] = useState(null);
   const [imageSize, setImageSize] = useState({ w: 1, h: 1 });
   const [opacity, setOpacity] = useState(0.6);
-  const [imageBounds, setImageBounds] = useState(DEFAULT_BOUNDS);
+  const [overlayConfig, setOverlayConfig] = useState(DEFAULT_OVERLAY);
   const [controlPoints, setControlPoints] = useState([]);
   const [pendingImg, setPendingImg] = useState(null);
   const [addingPoint, setAddingPoint] = useState(false);
   const [waitingGPS, setWaitingGPS] = useState(false);
   const [queryResult, setQueryResult] = useState(null);
   const [mode, setMode] = useState('calibrate');
+  const mapRef = useRef(null);
 
   const tps = controlPoints.length >= 3 ? buildTPS(controlPoints) : null;
 
@@ -27,6 +28,9 @@ export default function App() {
     setImageSize({ w, h });
     setControlPoints([]);
     setQueryResult(null);
+    // Center overlay on current map view
+    const center = mapRef.current?.getCenter() ?? [46.5, 2.5];
+    setOverlayConfig({ center, widthDeg: 15, heightDeg: 10, rotation: 0 });
   }
 
   function startAddPoint() {
@@ -61,7 +65,7 @@ export default function App() {
   }
 
   function saveCalibration() {
-    const data = { controlPoints, imageBounds };
+    const data = { controlPoints, overlayConfig };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -77,11 +81,13 @@ export default function App() {
       try {
         const data = JSON.parse(ev.target.result);
         setControlPoints(data.controlPoints || []);
+        if (data.overlayConfig) setOverlayConfig(data.overlayConfig);
       } catch {
         alert('Fichier invalide');
       }
     };
     reader.readAsText(file);
+    e.target.value = '';
   }
 
   const pendingStep = addingPoint ? 'img' : waitingGPS ? 'gps' : null;
@@ -142,6 +148,14 @@ export default function App() {
                 onDelete={deletePoint}
                 onClear={() => setControlPoints([])}
               />
+              {imageUrl && (
+                <div className="panel hint" style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                  <strong>Handles :</strong><br />
+                  🟢 Vert = déplacer<br />
+                  🟠 Orange = pivoter<br />
+                  🔵 Bleu = redimensionner
+                </div>
+              )}
             </>
           )}
           {mode === 'query' && (
@@ -162,9 +176,10 @@ export default function App() {
         <section className="map-section">
           <div className="section-title">OpenStreetMap</div>
           <MapView
+            ref={mapRef}
             imageUrl={imageUrl}
-            imageBounds={imageBounds}
-            onImageBoundsChange={setImageBounds}
+            overlayConfig={overlayConfig}
+            onOverlayConfigChange={setOverlayConfig}
             opacity={opacity}
             mode={mode}
             controlPoints={controlPoints}
